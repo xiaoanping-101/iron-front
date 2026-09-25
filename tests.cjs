@@ -41,8 +41,38 @@ const assert=require('node:assert/strict'),path=require('node:path'),fs=require(
  assert.deepEqual(await page.evaluate(()=>[player.mag,player.reserve,player.ammo,player.reload]),[30,150,3,0]);
  for(let s=0;s<6;s++){await page.evaluate(s=>{stage=s;loadStage();player.x=1700;player.inv=0;message=0;update();render()},s);await page.screenshot({path:'test-results/stage-'+(s+1)+'.png'})}
 
+ const depth=await page.evaluate(()=>{
+ stage=0;state='play';loadStage();enemies=[];player.inv=99999;player.x=655;player.y=groundAt(668,0)-player.h;keys.clear();
+ pressed.add('KeyQ');update();if(player.lane!==1)return 'Q did not change route';if(laneShift(1))return 'lane cooldown not enforced';
+ for(let i=0;i<21;i++)update();pressed.add('KeyQ');update();if(player.lane!==2)return 'back route unavailable';
+ player.laneCD=0;if(laneShift(1))return 'lane bounds failed';
+ let previous=player.y;keys.add('KeyD');for(let i=0;i<45;i++)update();keys.clear();if(!(player.ground&&player.y<previous-60))return 'slope walk failed';
+ pressed.add('Space');update();if(laneShift(-1))return 'airborne lane change allowed';for(let i=0;i<60;i++)update();
+ const bridge=platforms.find(p=>p.lane===2);player.x=bridge.x+40;player.y=groundAt(player.x+13,2)-player.h;player.vy=0;player.ground=true;
+ pressed.add('Space');for(let i=0;i<65;i++)update();if(player.support!==bridge)return 'bridge landing failed';
+ keys.add('KeyS');pressed.add('Space');update();keys.clear();for(let i=0;i<40;i++)update();if(player.support||!player.ground)return 'bridge drop failed';
+ return true;
+ });assert.equal(depth,true);
+ const lanesCombat=await page.evaluate(()=>{
+ loadStage();enemies=[];player.inv=99999;player.x=200;player.y=FLOOR-player.h;player.lane=0;
+ let foe={x:260,y:FLOOR-43,w:28,h:43,hp:2,kind:'soldier',lane:1,cd:999};enemies=[foe];player.cd=0;shoot();for(let i=0;i<12;i++)update();if(foe.hp!==2)return 'bullet crossed lanes';
+ player.lane=1;player.cd=0;shoot();for(let i=0;i<12;i++)update();if(foe.hp!==1)return 'same lane bullet missed';
+ pickups=[{x:player.x,y:player.y,w:24,h:24,kind:'health',lane:0}];player.hp=2;update();if(player.hp!==2)return 'pickup crossed lanes';
+ player.lane=0;update();if(player.hp!==4)return 'same lane pickup missed';
+ enemies=[{x:player.x+30,y:FLOOR-43,w:28,h:43,hp:20,lane:1}];explode({x:player.x,y:FLOOR-20,lane:0});if(enemies[0].hp!==20)return 'grenade crossed lanes';return true;
+ });assert.equal(lanesCombat,true);
+ const perf=await page.evaluate(()=>{
+ stage=3;loadStage();player.x=1700;player.inv=9999;update();for(let i=0;i<20;i++)render();
+ let calls=0;const orig=ctx.fillRect;ctx.fillRect=function(...args){calls++;return orig.apply(this,args)};const t=performance.now();
+ for(let i=0;i<200;i++){camera=1300+i*2;render()}const ms=performance.now()-t;ctx.fillRect=orig;
+ const result={scenario:'stage4, 200 scrolling render calls, headless Chrome',msPerRender:ms/200,fillRectPerRender:calls/200};
+ for(let i=0;i<30;i++){camera=i*140;render()}if(world.chunks.size>CACHE_LIMIT)throw Error('unbounded chunk cache');
+ const builds=world.builds;render();render();if(world.builds!==builds)throw Error('cache rebuilt without camera movement');
+ for(let i=0;i<30;i++)burst(player.x,player.y,'#fff',70);if(particles.length>220)throw Error('particle budget exceeded');return result;
+ });fs.writeFileSync('test-results/benchmark-after.json',JSON.stringify(perf,null,2));console.log('Render benchmark',perf);
+ for(let s=0;s<6;s++){await page.evaluate(s=>{stage=s;loadStage();player.x=950;player.lane=1;player.visualLane=1;player.y=groundAt(963,1)-player.h;player.inv=0;message=0;camera=player.x-280;cameraY=-30;render()},s);await page.screenshot({path:'test-results/depth-'+(s+1)+'.png'})}
  const touchPage=await browser.newPage({viewport:{width:844,height:390},hasTouch:true,isMobile:true});await touchPage.goto('file:///'+path.resolve(__dirname,'index.html').replace(/\\/g,'/'));assert(await touchPage.locator('.touch').isVisible());await touchPage.close();
- assert.deepEqual(errors,[]);console.log('PASS: boot, movement, jump/landing, shooting, grenade, immunity, health pickup, pause/resume, boss activation, 6-stage campaign, death/restart, touch UI, magazine consumption, automatic/manual reload, pause-safe reload timer, partial reserves, empty ammo lockout, grenade cap/cooldown, supply caps. No browser errors.');
+ assert.deepEqual(errors,[]);console.log('PASS: boot, movement, jump/landing, shooting, grenade, immunity, health pickup, pause/resume, boss activation, 6-stage campaign, death/restart, depth lanes, slopes, bridge landing/drop, lane-specific bullets/pickups/grenades, cache/particle budgets, touch UI, magazine consumption, automatic/manual reload, pause-safe reload timer, partial reserves, empty ammo lockout, grenade cap/cooldown, supply caps. No browser errors.');
  }finally{await browser.close()}
 })().catch(e=>{console.error(e);process.exitCode=1});
 
