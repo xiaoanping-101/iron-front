@@ -40,7 +40,7 @@ const assert=require('node:assert/strict'),path=require('node:path'),fs=require(
  await page.click('#start');assert.equal(await page.evaluate(()=>player.hp),6);
  assert.deepEqual(await page.evaluate(()=>[player.mag,player.reserve,player.ammo,player.reload]),[30,150,3,0]);
  for(let s=0;s<6;s++){await page.evaluate(s=>{stage=s;loadStage();player.x=1700;player.inv=0;message=0;update();render()},s);await page.screenshot({path:'test-results/stage-'+(s+1)+'.png'})}
- 
+
  const touchPage=await browser.newPage({viewport:{width:844,height:390},hasTouch:true,isMobile:true});await touchPage.goto('file:///'+path.resolve(__dirname,'index.html').replace(/\\/g,'/'));assert(await touchPage.locator('.touch').isVisible());await touchPage.close();
  assert.deepEqual(errors,[]);console.log('PASS: boot, movement, jump/landing, shooting, grenade, immunity, health pickup, pause/resume, boss activation, 6-stage campaign, death/restart, touch UI, magazine consumption, automatic/manual reload, pause-safe reload timer, partial reserves, empty ammo lockout, grenade cap/cooldown, supply caps. No browser errors.');
  }finally{await browser.close()}
