@@ -4,6 +4,8 @@
 
 ## 开始游戏
 
+[直接在线游玩](https://xiaoanping-101.github.io/iron-front/)
+
 下载仓库 ZIP，解压后双击 `index.html` 即可离线游玩。也可以安装 Node.js 后运行 `npm start`，打开 http://127.0.0.1:4173 。运行游戏无需安装 npm 依赖。
 
 | 操作 | 按键 |
@@ -35,3 +37,4 @@
 ## 许可
 
 本项目原创部分采用 MIT；Kontra 保留其原始 MIT 许可。与 SNK 或《合金弹头》无关联。
+
