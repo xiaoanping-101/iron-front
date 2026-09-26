@@ -1,22 +1,44 @@
 'use strict';
 // Shared navigation grid and solid cover. All actors still use continuous x/z coordinates.
 const NAV_CELL=26;
+const COVER_BIN=240;
+let coverStamp=0;
+const COVER_TYPES={crate:{w:56,h:35,d:28},barrier:{w:90,h:24,d:28},container:{w:112,h:60,d:48},sandbag:{w:98,h:26,d:34},tank:{w:48,h:48,d:40,round:true}};
+const SECTOR_PLANS=[
+ {name:'前哨检查站',surface:'concrete',cover:[['barrier',230,170],['sandbag',425,70],['tank',585,173]]},
+ {name:'仓储装卸区',surface:'paving',cover:[['container',70,52],['crate',258,171],['crate',330,171],['sandbag',455,71],['tank',602,170]]},
+ {name:'维修中庭',surface:'grate',cover:[['sandbag',60,173],['tank',255,60],['barrier',370,155],['crate',565,65]]}
+];
 function buildMap(){
- world.obstacles=[];
- const end=stages[stage].length-1050;
- for(let x=610,i=0;x<end;x+=350,i++){
-  const type=['crate','barrier','container'][(i+stage)%3];const width=type==='container'?104:type==='barrier'?90:56;
-  world.obstacles.push({x,z:[55,171,104,164][(i+stage)%4],w:width,h:type==='container'?58:type==='barrier'?24:35,d:type==='container'?44:28,type});
+ world.obstacles=[];world.coverBins=new Map();world.sectors=[{x:0,end:520,name:'集结入口',surface:'concrete'}];world.coverCandidates=0;
+ const end=stages[stage].length-1000;
+ function add(type,x,z){const dimensions=COVER_TYPES[type];world.obstacles.push({id:world.obstacles.length,type,x,z,...dimensions,baseY:groundAt(x+dimensions.w/2,z),variant:world.obstacles.length%3})}
+ add('crate',610,55);
+ for(let x=520,i=0;x<end;x+=760,i++){
+  const plan=SECTOR_PLANS[(i+stage)%SECTOR_PLANS.length],stop=Math.min(end,x+760);world.sectors.push({x,end:stop,name:plan.name,surface:plan.surface});
+  for(const [type,offset,z] of plan.cover){const px=x+offset;if(px+COVER_TYPES[type].w>stop-28||px<710)continue;add(type,px,z)}
  }
- const cols=Math.ceil(stages[stage].length/NAV_CELL),rows=Math.floor((MAP_FRONT-MAP_BACK)/NAV_CELL)+1;
- const grid=new Uint8Array(cols*rows);
+ world.sectors.push({x:end,end:stages[stage].length,name:'装甲决战区',surface:'arena'});
+ for(const o of world.obstacles){o.elevation=270+o.z-o.baseY;for(let i=Math.floor(o.x/COVER_BIN);i<=Math.floor((o.x+o.w)/COVER_BIN);i++){if(!world.coverBins.has(i))world.coverBins.set(i,[]);world.coverBins.get(i).push(o)}}
+ const cols=Math.ceil(stages[stage].length/NAV_CELL),rows=Math.floor((MAP_FRONT-MAP_BACK)/NAV_CELL)+1,grid=new Uint8Array(cols*rows);
  for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){const x=c*NAV_CELL+NAV_CELL/2,z=MAP_BACK+r*NAV_CELL+NAV_CELL/2;grid[r*cols+c]=Number(z<=MAP_FRONT&&canStand(x,z,12,10,0))}
  world.nav={cols,rows,grid,dist:new Int16Array(cols*rows).fill(-1),queue:new Int32Array(cols*rows),target:-1,updates:0};
- for(const e of [...enemies,...pickups]){if(canStand(e.x+(e.w||24)/2,depthOf(e),12,10,e.lift||0))continue;for(let step=1;step<20;step++){let z=clamp(depthOf(e)+(step%2?1:-1)*Math.ceil(step/2)*15,MAP_BACK+5,MAP_FRONT-5);if(canStand(e.x+e.w/2,z,12,10,0)){e.z=z;break}}if(e.kind==='soldier'||e.kind==='drone')placeActor(e);else e.y=groundAt(e.x+12,e.z)-24}
+ // Relocate every supply/enemy to a valid navigation cell, not only out of its nearest box.
+ for(const e of [...enemies,...pickups]){if(e.kind==='drone')continue;if(canStand(e.x+(e.w||24)/2,depthOf(e),12,10,0))continue;let best=-1,distance=Infinity;
+  for(let r=0;r<rows;r++)for(let c=Math.max(0,Math.floor(e.x/NAV_CELL)-5);c<Math.min(cols,Math.floor(e.x/NAV_CELL)+6);c++){if(!grid[r*cols+c])continue;const px=c*NAV_CELL+13,pz=MAP_BACK+r*NAV_CELL+13,d=(px-e.x-e.w/2)**2+(pz-depthOf(e))**2;if(d<distance){distance=d;best=r*cols+c}}
+  if(best>=0){e.x=best%cols*NAV_CELL+13-e.w/2;e.z=MAP_BACK+Math.floor(best/cols)*NAV_CELL+13}if(e.kind==='soldier')placeActor(e);else e.y=groundAt(e.x+12,e.z)-24;
+ }
 }
-function canStand(x,z,rx=12,rz=10,lift=0){return !(world.obstacles||[]).some(o=>lift<o.h&&x+rx>o.x&&x-rx<o.x+o.w&&z+rz>o.z-o.d/2&&z-rz<o.z+o.d/2)}
+function scanCover(minX,maxX,visit){const stamp=++coverStamp;for(let i=Math.floor(minX/COVER_BIN);i<=Math.floor(maxX/COVER_BIN);i++)for(const o of world.coverBins?.get(i)||[]){if(o._stamp===stamp)continue;o._stamp=stamp;world.coverCandidates++;if(visit(o))return o}return null}
+function footprintOverlap(o,x,z,rx=0,rz=0){
+ if(!o.round)return x+rx>o.x&&x-rx<o.x+o.w&&z+rz>o.z-o.d/2&&z-rz<o.z+o.d/2;
+ const cx=o.x+o.w/2,px=clamp(cx,x-rx,x+rx),pz=clamp(o.z,z-rz,z+rz);return ((px-cx)/(o.w/2))**2+((pz-o.z)/(o.d/2))**2<1;
+}
+function coverTopAt(o,x,z){return o.h+o.elevation-(270+z-groundAt(x,z))}
+function canStand(x,z,rx=12,rz=10,lift=0){return !scanCover(x-rx,x+rx,o=>lift<coverTopAt(o,x,z)-.05&&footprintOverlap(o,x,z,rx,rz))}
+function coverSupport(e){let height=0,support=null;const x=e.x+e.w/2,z=depthOf(e);scanCover(x,x,o=>{const top=coverTopAt(o,x,z);if(footprintOverlap(o,x,z)&&((e.lift||0)>=top-.15||(e.ground&&e.supportCover===o))&&top>height){height=top;support=o}return false});e.supportCover=support;return height}
 function moveOnGround(e,dx,dz){
- const min=e===player?checkpoint:0,lift=e.kind==='drone'?100:e.lift||0,oldX=e.x,oldZ=depthOf(e);
+ const min=e===player?checkpoint:0,lift=e.kind==='drone'?150:(e.lift||0)+(e.supportCover?2:0),oldX=e.x,oldZ=depthOf(e);
  const x=clamp(e.x+dx,min,stages[stage].length-e.w);if(canStand(x+e.w/2,oldZ,Math.min(12,e.w/2),9,lift))e.x=x;
  const z=clamp(oldZ+dz,MAP_BACK,MAP_FRONT);if(canStand(e.x+e.w/2,z,Math.min(12,e.w/2),9,lift))e.z=z;
  e.travelX=e.x-oldX;e.travelZ=depthOf(e)-oldZ;
@@ -34,7 +56,17 @@ function flowDirection(e){
  for(const j of [col>0?i-1:-1,col<n.cols-1?i+1:-1,row>0?i-n.cols:-1,row<n.rows-1?i+n.cols:-1])if(j>=0&&n.grid[j]&&n.dist[j]>=0&&(n.dist[best]<0||n.dist[j]<n.dist[best]))best=j;
  const tx=best%n.cols*NAV_CELL+NAV_CELL/2,tz=MAP_BACK+Math.floor(best/n.cols)*NAV_CELL+NAV_CELL/2;let dx=tx-e.x-e.w/2,dz=tz-depthOf(e),d=Math.hypot(dx,dz)||1;return [dx/d,dz/d];
 }
-function coverHit(b){return (world.obstacles||[]).some(o=>b.alt<o.h&&b.x>o.x&&b.x<o.x+o.w&&Math.abs(b.z-o.z)<o.d/2)}
+function coverHit(b){return !!scanCover(b.x,b.x,o=>b.alt<coverTopAt(o,b.x,b.z)&&footprintOverlap(o,b.x,b.z))}
+function coverImpact(b,from){
+ let result=null,nearest=Infinity;const endHeight=270+b.z-groundAt(b.x,b.z)+b.alt,startHeight=270+from.z-groundAt(from.x,from.z)+from.alt;
+ scanCover(Math.min(from.x,b.x),Math.max(from.x,b.x),o=>{
+  let enter=0,leave=1;const clip=(p,v,min,max)=>{if(Math.abs(v)<1e-9)return p>=min&&p<=max;let t1=(min-p)/v,t2=(max-p)/v;if(t1>t2)[t1,t2]=[t2,t1];enter=Math.max(enter,t1);leave=Math.min(leave,t2);return enter<=leave};
+  if(!clip(from.x,b.x-from.x,o.x,o.x+o.w)||!clip(from.z,b.z-from.z,o.z-o.d/2,o.z+o.d/2)||!clip(startHeight,endHeight-startHeight,o.elevation,o.elevation+o.h))return false;
+  if(o.round){const x=(from.x-o.x-o.w/2)/(o.w/2),z=(from.z-o.z)/(o.d/2),dx=(b.x-from.x)/(o.w/2),dz=(b.z-from.z)/(o.d/2),A=dx*dx+dz*dz,B=2*(x*dx+z*dz),C=x*x+z*z-1;
+   if(A<1e-10){if(C>0)return false}else{const disc=B*B-4*A*C;if(disc<0)return false;enter=Math.max(enter,(-B-Math.sqrt(disc))/(2*A));leave=Math.min(leave,(-B+Math.sqrt(disc))/(2*A));if(enter>leave)return false}}
+  if(enter>=0&&enter<=1&&enter<nearest){nearest=enter;result={cover:o,t:enter}}return false;
+ });return result;
+}
 function movePlayer(){
  const p=player;let mx=Number(down('ArrowRight','KeyD'))-Number(down('ArrowLeft','KeyA')),mz=Number(down('ArrowDown','KeyS'))-Number(down('ArrowUp','KeyW')),length=Math.hypot(mx,mz);
  if(length){mx/=length;mz/=length;p.aimX=mx;p.aimZ=mz;if(mx)p.face=Math.sign(mx)}
